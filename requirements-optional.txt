@@ -3,6 +3,23 @@
 #
 # Note: chromadb-client + fastembed moved to requirements.txt — RAG, semantic
 # memory, and tool selection are core paths, so they ship by default now.
+#
+# Note: the FULL `chromadb` distribution lives here, not in requirements.txt.
+# The HTTP-only `chromadb-client` ships by default because that's what the
+# app uses to talk TO a ChromaDB server. The full `chromadb` package provides
+# the `chromadb` CLI used to RUN a server — the sidecar pattern from
+# `render-start.sh` requires it. Install only when you operate a local
+# ChromaDB server; if you point Odysseus at an external Chroma host, skip it.
+
+# Full `chromadb` distribution (console-script `chromadb` for running a local
+# server sidecar). The HTTP-only `chromadb-client` package in requirements.txt
+# is enough to talk TO a ChromaDB server; this entry exists only when you want
+# to RUN one inside an Odysseus container (e.g. the sidecar pattern in
+# `render-start.sh`). With INSTALL_OPTIONAL=true in Docker (used by
+# render.yaml via buildArg) this bakes into the image, so the sidecar's
+# runtime `command -v chromadb` check passes immediately and we avoid a
+# 10–15s cold-boot pip install on every fresh start.
+chromadb
 
 # Local speech-to-text (microphone -> text) via faster-whisper, for the
 # "local" STT provider. Runs on CPU out of the box (CTranslate2 backend, no

@@ -1,0 +1,125 @@
+# render.yaml — Render.com Blueprint for Odysseus
+#
+# Deploys a single Docker web service from the repo's Dockerfile. Use
+# https://render.com/docs/blueprint-spec as the schema reference; this file
+# keeps things explicit and minimal so it's easy to audit before "Apply".
+#
+# Required Render tier:
+#   - "starter" plan or higher.  The free tier can host Docker but CANNOT
+#     attach a persistent disk, and Odysseus's whole state tree lives under
+#     ODYSSEUS_DATA_DIR (SQLite, auth.json, settings.json, sessions, memory,
+#     uploads, generated images). Without a disk, every redeploy wipes state.
+#
+# Required env to set in the Render dashboard BEFORE first deploy
+# (the entries marked `sync: false` here, which Render keeps secret):
+#   - ODYSSEUS_ADMIN_USER       (e.g. "admin")
+#   - ODYSSEUS_ADMIN_PASSWORD   (≥ PASSWORD_MIN_LENGTH=8 chars, prefer 24+)
+#   - OPENAI_API_KEY            (any OpenAI-compatible key; OpenRouter works)
+#   - ALLOWED_ORIGINS           (use https://<service>.onrender.com after first build)
+#
+# The Dockerfile is unchanged. We pass INSTALL_OPTIONAL=true as a buildArg so
+# requirements-optional.txt (ddgs for DuckDuckGo, faster-whisper for STT,
+# PyMuPDF, markitdown) installs into the image. render-start.sh seeds
+# /app/data/settings.json with search_provider=duckduckgo.
+
+services:
+  - type: web
+    name: odysseus
+    runtime: docker
+    plan: starter
+    region: oregon
+    rootDir: .
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    buildArgs:
+      - name: INSTALL_OPTIONAL
+        value: "true"
+    # The repo's Dockerfile CMD is hardcoded to --port 7000. Render sets
+    # $PORT=10000 and requires us to bind there. `dockerCommand` overrides
+    # the CMD but NOT the ENTRYPOINT — docker/entrypoint.sh still runs
+    # setup.py and repairs /app/data ownership as the odysseus user.
+    dockerCommand: sh /app/render-start.sh
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # ----- network / bind -----
+      - key: APP_BIND
+        value: 0.0.0.0
+      # PORT is set by Render automatically; render-start.sh reads it.
+
+      # ----- container user (matches the disk-mount owner) -----
+      - key: PUID
+        value: "1000"
+      - key: PGID
+        value: "1000"
+
+      # ----- auth / security -----
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: LOCALHOST_BYPASS
+        value: "false"
+      - key: SECURE_COOKIES
+        value: "true"          # Render terminates TLS; cookies go over HTTPS
+      - key: REQUEST_HARD_TIMEOUT
+        value: "60"
+
+      # ----- persistent disk (single source of truth: src/constants.py DATA_DIR) -----
+      # disk.mountPath is /app/data — same as ODYSSEUS_DATA_DIR below.
+      - key: ODYSSEUS_DATA_DIR
+        value: /app/data
+      - key: DATABASE_URL
+        value: sqlite:////app/data/app.db
+      - key: HF_HOME
+        value: /app/data/cache/huggingface
+      - key: FASTEMBED_CACHE_PATH
+        value: /app/data/fastembed_cache
+
+      # ----- ChromaDB sidecar (runs in this same container) -----
+      - key: CHROMADB_HOST
+        value: 127.0.0.1
+      - key: CHROMADB_PORT
+        value: "8100"
+
+      # ----- background workers off (single-instance app; schedules go to disk) -----
+      - key: ODYSSEUS_INPROCESS_POLLERS
+        value: "0"
+      - key: ODYSSEUS_INPROCESS_TASKS
+        value: "0"
+
+      # ----- per-feature upload caps (defaults exposed as env for visibility) -----
+      - key: ODYSSEUS_CHAT_UPLOAD_MAX_BYTES
+        value: "10485760"
+      - key: ODYSSEUS_GALLERY_UPLOAD_MAX_BYTES
+        value: "104857600"
+      - key: ODYSSEUS_GALLERY_TRANSFORM_UPLOAD_MAX_BYTES
+        value: "26214400"
+      - key: ODYSSEUS_MEMORY_IMPORT_MAX_BYTES
+        value: "10485760"
+      - key: ODYSSEUS_PERSONAL_UPLOAD_MAX_BYTES
+        value: "26214400"
+      - key: ODYSSEUS_EMAIL_COMPOSE_UPLOAD_MAX_BYTES
+        value: "26214400"
+      - key: ODYSSEUS_STT_MAX_AUDIO_BYTES
+        value: "26214400"
+      - key: ODYSSEUS_ICS_MAX_BYTES
+        value: "10485760"
+
+      # ----- secrets (Render dashboard-only) -----
+      - key: ODYSSEUS_ADMIN_USER
+        sync: false
+      - key: ODYSSEUS_ADMIN_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+    disk:
+      name: odysseus-data
+      mountPath: /app/data
+      sizeGB: 10
+
+# `databases:` block not used — SQLite on the persistent disk is sufficient
+# for a single-instance hobby deployment. Adding Render Postgres later is
+# straightforward: provision a key/value store via Render dashboard, change
+# DATABASE_URL=postgresql://... and rerun deploy.
