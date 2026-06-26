@@ -25,7 +25,7 @@
 
 ## Quick Start
 
-> `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/pewdiepie-archdaemon/odysseus/tree/main) if you want the more curated branch.
+> `dev` is the default branch and gets the newest changes first. Use [`main`]([https://github.com/ndavat/odysseus.git](https://github.com/ndavat/odysseus.git)) if you want the more curated branch.
 
 ```bash
 git clone https://github.com/pewdiepie-archdaemon/odysseus.git
