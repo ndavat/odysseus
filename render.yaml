@@ -1,14 +1,21 @@
-# render.yaml — Render.com Blueprint for Odysseus
+# render.yaml — Render.com Blueprint for Odysseus (free / demo tier).
 #
 # Deploys a single Docker web service from the repo's Dockerfile. Use
 # https://render.com/docs/blueprint-spec as the schema reference; this file
 # keeps things explicit and minimal so it's easy to audit before "Apply".
 #
-# Required Render tier:
-#   - "starter" plan or higher.  The free tier can host Docker but CANNOT
-#     attach a persistent disk, and Odysseus's whole state tree lives under
-#     ODYSSEUS_DATA_DIR (SQLite, auth.json, settings.json, sessions, memory,
-#     uploads, generated images). Without a disk, every redeploy wipes state.
+# Free-plan realities for this service (as of 2026 — see render.com/docs/free):
+#   - NO persistent disk. /app/data is ephemeral: every redeploy, restart,
+#     or 15-min idle spin-down wipes SQLite (app.db), auth.json, settings,
+#     sessions, memory, presets, uploads, generated images, scheduled tasks.
+#     Demo / preview only.
+#   - 512 MB RAM cap. ChromaDB sidecar dropped (chroma lives in /app/data,
+#     which is ephemeral anyway — saving ~150-200 MB is the priority).
+#   - 15-min idle spin-down + ~1 min cold start on return.
+#   - No zero-downtime deploys.
+#   - 750 instance-hours / month included in workspace (spun-down services
+#     do not consume these hours); exhausted workspace suspends all free
+#     services until the next calendar month.
 #
 # Required env to set in the Render dashboard BEFORE first deploy
 # (the entries marked `sync: false` here, which Render keeps secret):
@@ -17,31 +24,32 @@
 #   - OPENAI_API_KEY            (any OpenAI-compatible key; OpenRouter works)
 #   - ALLOWED_ORIGINS           (use https://<service>.onrender.com after first build)
 #
-# The Dockerfile is unchanged. We pass INSTALL_OPTIONAL=true as a buildArg so
-# requirements-optional.txt (ddgs for DuckDuckGo, faster-whisper for STT,
-# PyMuPDF, markitdown) installs into the image. render-start.sh seeds
-# /app/data/settings.json with search_provider=duckduckgo.
+# INSTALL_OPTIONAL is set to "false" so the heavier optional deps (chromadb,
+# faster-whisper, ddgs, PyMuPDF, markitdown) are NOT installed at image
+# build time. The image stays small (~150 MB) for fast cold starts and the
+# 512 MB RAM cap. render-start.sh seeds /app/data/settings.json with
+# search_provider=duckduckgo on every fresh boot (the file gets wiped on
+# every spin-down, so we re-seed idempotently).
 
 services:
   - type: web
     name: odysseus
     runtime: docker
-    plan: starter
+    plan: free
     region: oregon
     rootDir: .
     dockerfilePath: ./Dockerfile
     dockerContext: .
     # NOTE: do NOT add `buildArgs:` here. Render's Blueprint schema for the
-    # `file.Service` type rejects it (the error reads "field buildArgs not
-    # found in type file.Service"). Instead, Render auto-translates envVars
-    # entries into --build-arg at image-build time, so INSTALL_OPTIONAL is
-    # declared in the envVars list further down and picked up by the
-    # Dockerfile's ARG INSTALL_OPTIONAL=false default. Source:
+    # `file.Service` type rejects it. Instead envVars entries are
+    # auto-translated into --build-arg at image-build time; INSTALL_OPTIONAL
+    # is declared in the envVars list below and consumed by the Dockerfile's
+    # ARG INSTALL_OPTIONAL=false default. Source:
     # https://render.com/docs/docker#docker-specific-features
-    # The repo's Dockerfile CMD is hardcoded to --port 7000. Render sets
-    # $PORT=10000 and requires us to bind there. `dockerCommand` overrides
+    # Repo Dockerfile CMD is hardcoded to --port 7000. Render sets
+    # $PORT=10000 and expects us to bind there. `dockerCommand` overrides
     # the CMD but NOT the ENTRYPOINT — docker/entrypoint.sh still runs
-    # setup.py and repairs /app/data ownership as the odysseus user.
+    # setup.py and repairs ownership as the odysseus user.
     dockerCommand: sh /app/render-start.sh
     healthCheckPath: /api/health
     autoDeploy: true
@@ -49,16 +57,15 @@ services:
       # ----- build-time flag (Render auto-translates envVars → --build-arg) -----
       # Per https://render.com/docs/docker#docker-specific-features, envVars
       # entries are automatically passed to `docker build` as --build-arg.
-      # NOT secret — it's a public build flag, not a credential (no risk of
-      # being persisted in image layers beyond the harmless "true" string).
       - key: INSTALL_OPTIONAL
-        value: "true"
+        value: "false"
+
       # ----- network / bind -----
       - key: APP_BIND
         value: 0.0.0.0
       # PORT is set by Render automatically; render-start.sh reads it.
 
-      # ----- container user (matches the disk-mount owner) -----
+      # ----- container user (matches entrypoint.sh PUID/PGID; 1000 = odysseus) -----
       - key: PUID
         value: "1000"
       - key: PGID
@@ -74,24 +81,13 @@ services:
       - key: REQUEST_HARD_TIMEOUT
         value: "60"
 
-      # ----- persistent disk (single source of truth: src/constants.py DATA_DIR) -----
-      # disk.mountPath is /app/data — same as ODYSSEUS_DATA_DIR below.
+      # ----- ephemeral data dir (free plan = wiped on every spin-down) -----
       - key: ODYSSEUS_DATA_DIR
         value: /app/data
       - key: DATABASE_URL
         value: sqlite:////app/data/app.db
-      - key: HF_HOME
-        value: /app/data/cache/huggingface
-      - key: FASTEMBED_CACHE_PATH
-        value: /app/data/fastembed_cache
 
-      # ----- ChromaDB sidecar (runs in this same container) -----
-      - key: CHROMADB_HOST
-        value: 127.0.0.1
-      - key: CHROMADB_PORT
-        value: "8100"
-
-      # ----- background workers off (single-instance app; schedules go to disk) -----
+      # ----- background workers off (single-instance ephemeral app) -----
       - key: ODYSSEUS_INPROCESS_POLLERS
         value: "0"
       - key: ODYSSEUS_INPROCESS_TASKS
@@ -125,12 +121,9 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
 
-    disk:
-      name: odysseus-data
-      mountPath: /app/data
-      sizeGB: 10
-
-# `databases:` block not used — SQLite on the persistent disk is sufficient
-# for a single-instance hobby deployment. Adding Render Postgres later is
-# straightforward: provision a key/value store via Render dashboard, change
-# DATABASE_URL=postgresql://... and rerun deploy.
+# `disk:` block intentionally omitted — Render's Blueprint validator rejects
+# persistent disks on the free tier. /app/data lives on the container's
+# writable ephemeral layer instead, so all state is wiped on every
+# spin-down / redeploy. Best suited for ephemeral demos / previews.
+#
+# No `databases:` block either — SQLite on /app/data is sufficient.
