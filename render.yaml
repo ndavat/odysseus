@@ -31,9 +31,13 @@ services:
     rootDir: .
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    buildArgs:
-      - name: INSTALL_OPTIONAL
-        value: "true"
+    # NOTE: do NOT add `buildArgs:` here. Render's Blueprint schema for the
+    # `file.Service` type rejects it (the error reads "field buildArgs not
+    # found in type file.Service"). Instead, Render auto-translates envVars
+    # entries into --build-arg at image-build time, so INSTALL_OPTIONAL is
+    # declared in the envVars list further down and picked up by the
+    # Dockerfile's ARG INSTALL_OPTIONAL=false default. Source:
+    # https://render.com/docs/docker#docker-specific-features
     # The repo's Dockerfile CMD is hardcoded to --port 7000. Render sets
     # $PORT=10000 and requires us to bind there. `dockerCommand` overrides
     # the CMD but NOT the ENTRYPOINT — docker/entrypoint.sh still runs
@@ -42,6 +46,13 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      # ----- build-time flag (Render auto-translates envVars → --build-arg) -----
+      # Per https://render.com/docs/docker#docker-specific-features, envVars
+      # entries are automatically passed to `docker build` as --build-arg.
+      # NOT secret — it's a public build flag, not a credential (no risk of
+      # being persisted in image layers beyond the harmless "true" string).
+      - key: INSTALL_OPTIONAL
+        value: "true"
       # ----- network / bind -----
       - key: APP_BIND
         value: 0.0.0.0
