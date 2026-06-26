@@ -28,10 +28,15 @@
 > `dev` is the default branch and gets the newest changes first. Use [`main`]([https://github.com/ndavat/odysseus.git](https://github.com/ndavat/odysseus.git)) if you want the more curated branch.
 
 ```bash
-git clone https://github.com/pewdiepie-archdaemon/odysseus.git
+git clone https://github.com/ndavat/odysseus.git
 cd odysseus
-cp .env.example .env
-docker compose up -d --build
+py -3.12 -m venv venv
+venv\Scripts\Activate.ps1
+pip install -U pip
+pip install -r requirements,txt
+pip install ddgs
+python setup.py
+python -m uvicorn app:app --host 127.0.0.1 --port 7000
 ```
 
 Open `http://localhost:7000` when the containers are healthy. The first admin password is printed in `docker compose logs odysseus`.
